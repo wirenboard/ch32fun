@@ -849,6 +849,16 @@ static void SwitchRXMode( void )
  */
 static void SendMessage( uint8_t size )
 {
+	// WCH's reference PD stack (USBPD_SNK example, PD_Phy_SendPack) enables
+	// CC_LVE on the active CC line for the duration of every transmission -
+	// without it the BMC TX amplitude is out of spec. Lenient chargers decode
+	// it anyway; strict sources (e.g. laptop PD controllers) ignore every
+	// message we send. Cleared again in the TX-complete interrupt.
+	if ( USBPD->CONFIG & CC_SEL )
+		USBPD->PORT_CC2 |= CC_LVE;
+	else
+		USBPD->PORT_CC1 |= CC_LVE;
+
 	USBPD->BMC_CLK_CNT = UPD_TMR_TX;
 	USBPD->TX_SEL = UPD_SOP0;
 	USBPD->BMC_TX_SZ = size;
@@ -936,6 +946,9 @@ void USBPD_IRQHandler( void )
 	// Transmit complete interrupt (GoodCRC only)
 	if ( USBPD->STATUS & IF_TX_END )
 	{
+		// end of transmission: stop driving the CC line (see SendMessage)
+		USBPD->PORT_CC1 &= ~CC_LVE;
+		USBPD->PORT_CC2 &= ~CC_LVE;
 		SwitchRXMode();
 		USBPD->STATUS |= IF_TX_END;
 	}
