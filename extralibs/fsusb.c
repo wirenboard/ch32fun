@@ -1039,13 +1039,16 @@ int USBFS_SendEndpointNEW( int endp, uint8_t* data, int len, int copy)
 #if defined(CH5xx) || defined(CH32X03x)
 	// Check RB_UIS_SETUP_ACT
 	if( (USBFS->INT_ST & 0x80) ) return -3;
+	// A bidirectional endpoint has ONE DMA register: the hardware takes the
+	// OUT buffer at DMA+0 and the IN buffer at DMA+64, so DMA must not move.
+	int bdir = ( USBFSCTX.endpoints[endp].mode & ( USBFS_EP_MODE_TX | USBFS_EP_MODE_RX ) ) == ( USBFS_EP_MODE_TX | USBFS_EP_MODE_RX );
 #endif
 	if ( len )
 	{
 		if( copy )
 		{
 #if defined(CH5xx) || defined(CH32X03x)
-			if ( endp != 4 ) UEP_DMA( endp ) = (uintptr_t)USBFSCTX.endpoints[endp].in;
+			if ( endp != 4 && !bdir ) UEP_DMA( endp ) = (uintptr_t)USBFSCTX.endpoints[endp].in;
 #else
 			UEP_DMA( endp ) = (uintptr_t)USBFSCTX.endpoints[endp].in;
 #endif
@@ -1055,6 +1058,7 @@ int USBFS_SendEndpointNEW( int endp, uint8_t* data, int len, int copy)
 		else 
 		{
 #if defined(CH5xx) || defined(CH32X03x)
+			if( bdir ) return -4; // zero-copy impossible: the IN buffer is fixed
 			if ( endp != 4 ) UEP_DMA( endp ) = (uintptr_t)data;
 #else
 			UEP_DMA( endp ) = (uintptr_t)data;
