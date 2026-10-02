@@ -169,7 +169,7 @@ int ISPSetupInterface( void * d ) {
 				}
 				else // If CH32X035 of CH32L103
 				{
-					if ( (rbuff[4] & 0xf) == 7 ) iss->flash_size = 48;
+					if ( (rbuff[4] & 0xf) == 7 ) iss->flash_size = 48 * 1024;
 					else iss->flash_size = 64 * 1024;
 				}
 			}
