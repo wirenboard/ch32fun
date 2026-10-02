@@ -671,6 +671,11 @@ USBPD_Result_e USBPD_SinkNegotiate( void )
 void USBPD_Reset( void )
 {
 	NVIC_DisableIRQ( USBPD_IRQn );
+	// also stop the BMC receiver/transmitter and release CC_LVE, which an
+	// interrupted transmission would otherwise leave on
+	USBPD->CONTROL &= ~( PD_TX_EN | BMC_START );
+	USBPD->PORT_CC1 &= ~CC_LVE;
+	USBPD->PORT_CC2 &= ~CC_LVE;
 	s_instance = ( USBPD_Instance_t ){
 		.pdVersion = eUSBPD_REV_30,
 	};
