@@ -500,6 +500,13 @@ void USBPD_Reset( void );
 USBPD_State_e USBPD_GetState( void );
 
 /**
+ * @brief  Number of SOP packets received since the last USBPD_Reset()
+ * @param  None
+ * @return Packet count (any message type, GoodCRC included)
+ */
+uint32_t USBPD_RxCount( void );
+
+/**
  * @brief  Convert USB PD state to string
  * @param state: USBPD_State_e to convert
  * @return Pointer to a string representing the state
@@ -556,6 +563,7 @@ typedef struct
 	uint8_t messageID;
 	volatile uint8_t pdoCount;
 	bool gotSourceGoodCRC;
+	volatile uint32_t rxCount;
 } USBPD_Instance_t;
 
 static __attribute__( ( aligned( 4 ) ) ) uint8_t s_buffer[34];
@@ -684,6 +692,11 @@ void USBPD_Reset( void )
 USBPD_State_e USBPD_GetState( void )
 {
 	return s_instance.state;
+}
+
+uint32_t USBPD_RxCount( void )
+{
+	return s_instance.rxCount;
 }
 
 #if FUNCONF_USBPD_NO_STR
@@ -969,6 +982,7 @@ void USBPD_IRQHandler( void )
 		// Check if we received a SOP0 packet
 		if ( ( ( USBPD->STATUS & BMC_AUX_MASK ) == BMC_AUX_SOP0 ) && ( USBPD->BMC_BYTE_CNT >= 6 ) )
 		{
+			s_instance.rxCount++;
 			ParsePacket();
 		}
 		USBPD->STATUS |= IF_RX_ACT;
