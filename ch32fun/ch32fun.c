@@ -1888,7 +1888,13 @@ void DelaySysTick( uint32_t n )
 #if defined(CH32V003) || defined(CH32V00x)
 	uint32_t targend = SysTick->CNT + n;
 	while( ((int32_t)( SysTick->CNT - targend )) < 0 );
-#elif defined(CH32V20x) || defined(CH32V30x) || defined(CH32X03x) || defined(CH32L103) || defined(CH582_CH583) || defined(CH591_CH592)
+#elif defined(CH32X03x)
+	// The 64-bit CNT is read as two 32-bit loads. A read torn at a low-word
+	// wrap is 2^32 ticks off and made the delay last ~89 s at 48 MHz (also
+	// inside interrupts). n is 32 bits anyway: compare on the low word only.
+	uint32_t start = SysTick->CNTL;
+	while( SysTick->CNTL - start < n );
+#elif defined(CH32V20x) || defined(CH32V30x) || defined(CH32L103) || defined(CH582_CH583) || defined(CH591_CH592)
 	uint64_t targend = SysTick->CNT + n;
 	while( ((int64_t)( SysTick->CNT - targend )) < 0 );
 #elif defined(CH32V10x) || defined(CH570_CH572) || defined(CH584_CH585) || defined(CH32H41x)
