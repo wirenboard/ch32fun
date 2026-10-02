@@ -1008,6 +1008,21 @@ void USBFSReset()
 }
 #endif
 
+// Mask only the USB interrupt around read-modify-writes of endpoint control
+// bytes the ISR also writes, and restore its previous enable state, so the
+// helpers below also work with the IRQ already masked or inside the ISR.
+static inline uint32_t USBFS_IrqSave( void )
+{
+	uint32_t was = NVIC_GetStatusIRQ( USB_IRQn );
+	NVIC_DisableIRQ( USB_IRQn );
+	return was;
+}
+
+static inline void USBFS_IrqRestore( uint32_t was )
+{
+	if( was ) NVIC_EnableIRQ( USB_IRQn );
+}
+
 uint8_t * USBFS_GetEPBufferIfAvailable( int endp )
 {
 	if( USBFSCTX.endpoints[endp].busy ) return 0;
@@ -1023,11 +1038,11 @@ int USBFS_SendEndpoint( int endp, int len )
 	// Check RB_UIS_SETUP_ACT
 	if( (USBFS->INT_ST & 0x80) ) return -3;
 #endif
-	NVIC_DisableIRQ( USB_IRQn );
+	uint32_t irq = USBFS_IrqSave();
+	USBFSCTX.endpoints[endp].busy = 1;
 	UEP_CTRL_LEN( endp ) = len;
 	UEP_CTRL_TX( endp ) = ( UEP_CTRL_TX( endp ) & ~USBFS_UEP_T_RES_MASK ) | USBFS_UEP_T_RES_ACK;
-	USBFSCTX.endpoints[endp].busy = 1;
-	NVIC_EnableIRQ( USB_IRQn );
+	USBFS_IrqRestore( irq );
 	return 0;
 }
 
@@ -1065,33 +1080,39 @@ int USBFS_SendEndpointNEW( int endp, uint8_t* data, int len, int copy)
 #endif
 		}
 	}
-	// NVIC_DisableIRQ( USB_IRQn );
+	// busy before arming (the IN-complete interrupt clears it), all under
+	// the IRQ guard - else an IN completing in between leaves busy stuck at 1
+	uint32_t irq = USBFS_IrqSave();
+	USBFSCTX.endpoints[endp].busy = 1;
 	UEP_CTRL_LEN( endp ) = len;
 	UEP_CTRL_TX( endp ) = ( UEP_CTRL_TX( endp ) & ~USBFS_UEP_T_RES_MASK ) | USBFS_UEP_T_RES_ACK;
-	USBFSCTX.endpoints[endp].busy = 1;
-	// NVIC_EnableIRQ( USB_IRQn );
+	USBFS_IrqRestore( irq );
 	return 0;
 }
 
 int USBFS_SendACK( int endp, int tx )
 {
+	uint32_t irq = USBFS_IrqSave(); // RMW of a byte the ISR also writes
 	if( tx ) UEP_CTRL_TX( endp ) = ( UEP_CTRL_TX( endp ) & ~USBFS_UEP_T_RES_MASK ) | USBFS_UEP_T_RES_ACK;
 #if defined(CH5xx) || defined(CH32X03x) || defined (CH32V10x)
 	else UEP_CTRL_TX(endp) = ( UEP_CTRL_TX(endp) & ~USBFS_UEP_R_RES_MASK ) | USBFS_UEP_R_RES_ACK;
 #else
 	else UEP_CTRL_RX(endp) = ( UEP_CTRL_RX(endp) & ~USBFS_UEP_R_RES_MASK ) | USBFS_UEP_R_RES_ACK;
 #endif
+	USBFS_IrqRestore( irq );
 	return 0;
 }
 
 int USBFS_SendNAK( int endp, int tx )
 {
+	uint32_t irq = USBFS_IrqSave(); // RMW of a byte the ISR also writes
 	if( tx ) UEP_CTRL_TX( endp ) = ( UEP_CTRL_TX( endp ) & ~USBFS_UEP_T_RES_MASK ) | USBFS_UEP_T_RES_NAK;
 #if defined(CH5xx) || defined(CH32X03x) || defined (CH32V10x)
 	else UEP_CTRL_TX(endp) = ( UEP_CTRL_TX(endp) & ~USBFS_UEP_R_RES_MASK ) | USBFS_UEP_R_RES_NAK;
 #else
 	else UEP_CTRL_RX(endp) = ( UEP_CTRL_RX(endp) & ~USBFS_UEP_R_RES_MASK ) | USBFS_UEP_R_RES_NAK;
 #endif
+	USBFS_IrqRestore( irq );
 	return 0;
 }
 
