@@ -498,21 +498,22 @@ void USBFS_IRQHandler()
 							if( (uint8_t)( USBFS_IndexValue & 0xFF ) == USB_REQ_FEAT_ENDP_HALT )
 							{
 								/* Clear End-point Feature */
-								if( ctx->endpoints[ep].mode ) 
+								// The endpoint is in wIndex (bit 7 = IN), not the one the
+								// SETUP arrived on. Clearing a halt also resets that
+								// direction's data toggle (USB 2.0 9.4.5).
+								int tep = USBFS_SetupReqIndex & 0x0f;
+								int tin = USBFS_SetupReqIndex & DEF_UEP_IN;
+								if( tep == 0 )
+									; // EP0 never stays halted
+								else if( tep < FUSB_MAX_EP_CNT && tin && ( ctx->endpoints[tep].mode & USBFS_EP_MODE_TX ) )
 								{
-									// UEP_CTRL_TX(ep) = USBFS_UEP_T_RES_STALL | CHECK_USBFS_UEP_T_AUTO_TOG;
-									if( USBFS_SetupReqIndex & DEF_UEP_IN  && (ctx->endpoints[ep].mode & USBFS_EP_MODE_TX) ) UEP_CTRL_TX(ep) = USBFS_UEP_T_RES_NAK;
-#if defined(CH5xx) || defined(CH32X03x) || defined (CH32V10x)
-									else if( USBFS_SetupReqIndex & DEF_UEP_OUT && (ctx->endpoints[ep].mode & USBFS_EP_MODE_RX) ) UEP_CTRL_TX(ep) = USBFS_UEP_R_RES_ACK;
-#else
-									else if( USBFS_SetupReqIndex & DEF_UEP_OUT && (ctx->endpoints[ep].mode & USBFS_EP_MODE_RX) ) UEP_CTRL_RX(ep) = USBFS_UEP_R_RES_ACK;
-#endif
-									else goto sendstall;
+									UEP_CTRL_TX(tep) = ( UEP_CTRL_TX(tep) & ~( USBFS_UEP_T_RES_MASK | USBFS_UEP_T_TOG ) ) | USBFS_UEP_T_RES_NAK;
+									ctx->endpoints[tep].busy = 0;
 								}
+								else if( tep < FUSB_MAX_EP_CNT && !tin && ( ctx->endpoints[tep].mode & USBFS_EP_MODE_RX ) )
+									UEP_CTRL_RX(tep) = ( UEP_CTRL_RX(tep) & ~( USBFS_UEP_R_RES_MASK | USBFS_UEP_R_TOG ) ) | USBFS_UEP_R_RES_ACK;
 								else
-								{
 									goto sendstall;
-								}
 							}
 							else
 							{
@@ -547,16 +548,15 @@ void USBFS_IRQHandler()
 							/* Set Endpoint Feature */
 							if( (uint8_t)( USBFS_IndexValue & 0xFF ) == USB_REQ_FEAT_ENDP_HALT )
 							{
-								if( ctx->endpoints[ep].mode )
-								{
-									if( (USBFS_SetupReqIndex & DEF_UEP_IN) && (ctx->endpoints[ep].mode & USBFS_EP_MODE_TX) )UEP_CTRL_TX(ep) = ( UEP_CTRL_TX(ep) & ~USBFS_UEP_T_RES_MASK ) | USBFS_UEP_T_RES_STALL;
-#if defined(CH5xx) || defined(CH32X03x) || defined (CH32V10x)
-									else if( (USBFS_SetupReqIndex & DEF_UEP_OUT) && (ctx->endpoints[ep].mode & USBFS_EP_MODE_RX) )UEP_CTRL_TX(ep) = ( UEP_CTRL_TX(ep) & ~USBFS_UEP_R_RES_MASK ) | USBFS_UEP_R_RES_STALL;
-#else
-									else if( (USBFS_SetupReqIndex & DEF_UEP_OUT) && (ctx->endpoints[ep].mode & USBFS_EP_MODE_RX) )UEP_CTRL_RX(ep) = ( UEP_CTRL_RX(ep) & ~USBFS_UEP_R_RES_MASK ) | USBFS_UEP_R_RES_STALL;
-#endif
-									else goto sendstall;
-								}
+								// endpoint from wIndex, see CLEAR_FEATURE
+								int tep = USBFS_SetupReqIndex & 0x0f;
+								int tin = USBFS_SetupReqIndex & DEF_UEP_IN;
+								if( tep && tep < FUSB_MAX_EP_CNT && tin && ( ctx->endpoints[tep].mode & USBFS_EP_MODE_TX ) )
+									UEP_CTRL_TX(tep) = ( UEP_CTRL_TX(tep) & ~USBFS_UEP_T_RES_MASK ) | USBFS_UEP_T_RES_STALL;
+								else if( tep && tep < FUSB_MAX_EP_CNT && !tin && ( ctx->endpoints[tep].mode & USBFS_EP_MODE_RX ) )
+									UEP_CTRL_RX(tep) = ( UEP_CTRL_RX(tep) & ~USBFS_UEP_R_RES_MASK ) | USBFS_UEP_R_RES_STALL;
+								else
+									goto sendstall;
 							}
 							else
 								goto sendstall;
@@ -588,17 +588,15 @@ void USBFS_IRQHandler()
 						}
 						else if( ( USBFS_SetupReqType & USB_REQ_RECIP_MASK ) == USB_REQ_RECIP_ENDP )
 						{
-							if( ctx->endpoints[ep].mode )
-							{
-								if( USBFS_SetupReqIndex & DEF_UEP_IN && (ctx->endpoints[ep].mode & USBFS_EP_MODE_TX) ) ctrl0buff[0] = ( UEP_CTRL_TX(ep) & USBFS_UEP_T_RES_MASK ) == USBFS_UEP_T_RES_STALL;
-#if defined(CH5xx) || defined(CH32X03x) || defined (CH32V10x)
-								else if( USBFS_SetupReqIndex & DEF_UEP_OUT && (ctx->endpoints[ep].mode & USBFS_EP_MODE_RX) ) ctrl0buff[0] = ( UEP_CTRL_TX(ep) & USBFS_UEP_R_RES_MASK ) == USBFS_UEP_R_RES_STALL;
-#else
-								else if( USBFS_SetupReqIndex & DEF_UEP_OUT && (ctx->endpoints[ep].mode & USBFS_EP_MODE_RX) ) ctrl0buff[0] = ( UEP_CTRL_RX(ep) & USBFS_UEP_R_RES_MASK ) == USBFS_UEP_R_RES_STALL;
-#endif
-								else goto sendstall;
-							}
-								
+							// endpoint from wIndex, see CLEAR_FEATURE
+							int tep = USBFS_SetupReqIndex & 0x0f;
+							int tin = USBFS_SetupReqIndex & DEF_UEP_IN;
+							if( tep == 0 )
+								; // EP0: not halted
+							else if( tep < FUSB_MAX_EP_CNT && tin && ( ctx->endpoints[tep].mode & USBFS_EP_MODE_TX ) )
+								ctrl0buff[0] = ( UEP_CTRL_TX(tep) & USBFS_UEP_T_RES_MASK ) == USBFS_UEP_T_RES_STALL;
+							else if( tep < FUSB_MAX_EP_CNT && !tin && ( ctx->endpoints[tep].mode & USBFS_EP_MODE_RX ) )
+								ctrl0buff[0] = ( UEP_CTRL_RX(tep) & USBFS_UEP_R_RES_MASK ) == USBFS_UEP_R_RES_STALL;
 							else
 								goto sendstall;
 						}
