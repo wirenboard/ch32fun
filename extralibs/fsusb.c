@@ -851,6 +851,12 @@ int buffer_counter = 1;
 
 	for( int i = 1; i < FUSB_MAX_EP_CNT; i++ )
 	{
+#if defined(CH5xx) || defined(CH32X03x) || defined (CH32V10x)
+		// one control byte for both directions - write one combined value
+		if( USBFSCTX.endpoints[i].mode )
+			UEP_CTRL_TX(i) = ( ( USBFSCTX.endpoints[i].mode & USBFS_EP_MODE_TX ) ? USBFS_UEP_T_RES_NAK : 0 )
+			               | ( ( USBFSCTX.endpoints[i].mode & USBFS_EP_MODE_RX ) ? USBFS_UEP_R_RES_ACK : 0 );
+#else
 		if( USBFSCTX.endpoints[i].mode & USBFS_EP_MODE_TX )
 		{
 			UEP_CTRL_TX(i) = USBFS_UEP_T_RES_NAK;
@@ -858,12 +864,9 @@ int buffer_counter = 1;
 
 		if( USBFSCTX.endpoints[i].mode & USBFS_EP_MODE_RX )
 		{
-#if defined(CH5xx) || defined(CH32X03x) || defined (CH32V10x)
-			UEP_CTRL_TX(i) = USBFS_UEP_R_RES_ACK;
-#else
 			UEP_CTRL_RX(i) = USBFS_UEP_R_RES_ACK;
-#endif
 		}
+#endif
 		USBFSCTX.endpoints[i].busy = 0;
 	}
 }
