@@ -770,11 +770,18 @@ int buffer_counter = 1;
 
 #if FUSB_EP4_MODE
 #if defined(CH5xx) || defined(CH32X03x)
+	// EP4 has no DMA register; its buffers follow EP0's (UEP0_DMA+64 = OUT,
+	// then IN), so they must be rows 1 and 2 - EP4 is allocated first.
 	USBFSCTX.endpoints[4].mode = FUSB_EP4_MODE &0xc;
+	USBFS->UEP4_1_MOD |= FUSB_EP4_MODE & 0xc; // EP4_R_EN (bit 3) / EP4_T_EN (bit 2)
 
-	USBFSCTX.endpoints[4].out = ((USBFSCTX.endpoints[4].mode & USBFS_EP_MODE_RX)?((uintptr_t)USBFSCTX.ep_buffers[buffer_counter]):0);
-	USBFSCTX.endpoints[4].in = ((USBFSCTX.endpoints[4].mode & USBFS_EP_MODE_TX)?((uintptr_t)USBFSCTX.ep_buffers[buffer_counter+64]):0);
-	buffer_counter += (((USBFSCTX.endpoints[4].mode & USBFS_EP_MODE_TX)?1:0) + ((USBFSCTX.endpoints[4].mode & USBFS_EP_MODE_RX)?1:0));
+	{
+		int ep4_rx = ( USBFSCTX.endpoints[4].mode & USBFS_EP_MODE_RX ) ? 1 : 0;
+		int ep4_tx = ( USBFSCTX.endpoints[4].mode & USBFS_EP_MODE_TX ) ? 1 : 0;
+		USBFSCTX.endpoints[4].out = ep4_rx ? USBFSCTX.ep_buffers[buffer_counter] : 0;
+		USBFSCTX.endpoints[4].in = ep4_tx ? USBFSCTX.ep_buffers[buffer_counter + ep4_rx] : 0;
+		buffer_counter += ep4_rx + ep4_tx;
+	}
 #else
 	USBFSCTX.endpoints[4].mode = FUSB_EP4_MODE;
 	USBFS->UEP4_1_MOD |= FUSB_EP4_MODE;
