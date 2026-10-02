@@ -444,6 +444,7 @@ typedef enum
 	eUSBPD_ERROR_ARGS,
 	eUSBPD_ERROR_NOT_SUPPORTED,
 	eUSBPD_ERROR_TIMEOUT,
+	eUSBPD_ERROR_TX_STUCK,
 } USBPD_Result_e;
 
 typedef enum
@@ -645,7 +646,16 @@ USBPD_Result_e USBPD_SinkNegotiate( void )
 			// sending the Request. Without this, SelectPDO's SendMessage races with
 			// the in-progress GoodCRC transmission (~450 µs at 300 kHz BMC), causing
 			// strict chargers to reject or ignore the request.
-			while ( USBPD->CONTROL & PD_TX_EN );
+			// Bounded (2 ms, iteration-capped): a stuck PHY must not hang the
+			// caller's loop.
+			{
+				const uint32_t start = SysTick->CNTL;
+				for ( uint32_t n = 0; USBPD->CONTROL & PD_TX_EN; n++ )
+				{
+					if ( n > 2 * DELAY_MS_TIME || SysTick->CNTL - start > 2 * DELAY_MS_TIME )
+						return eUSBPD_ERROR_TX_STUCK;
+				}
+			}
 			USBPD_SelectPDO( 0, 0 ); // Select the first PDO by default
 			s_instance.state = eSTATE_WAIT_ACCEPT;
 			break;
@@ -708,6 +718,7 @@ const char *USBPD_ResultToStr( USBPD_Result_e result )
 		case eUSBPD_ERROR_ARGS: return "Error Args";
 		case eUSBPD_ERROR_NOT_SUPPORTED: return "Error Not Supported";
 		case eUSBPD_ERROR_TIMEOUT: return "Error Timeout";
+		case eUSBPD_ERROR_TX_STUCK: return "TX stuck";
 		default: return "Unknown Result";
 	}
 }
