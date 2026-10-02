@@ -867,6 +867,21 @@ static void SendMessage( uint8_t size )
 }
 
 /**
+ * @brief  Wait the interframe gap (tInterFrameGap >= 25 us) before a reply.
+ *         Runs in the interrupt, so it must stay short and bounded: it waits
+ *         on the 32-bit SysTick word (wrap-safe) and is iteration-capped,
+ *         so even a stopped or reconfigured SysTick cannot hang it.
+ * @param  None
+ * @return None
+ */
+static inline void InterframeGap( void )
+{
+	const uint32_t start = SysTick->CNTL;
+	for ( uint32_t n = 0; n < 8192 && SysTick->CNTL - start < 30 * DELAY_US_TIME; n++ )
+		;
+}
+
+/**
  * @brief  Parse the received packet
  * @param  None
  * @return None
@@ -916,7 +931,7 @@ static void ParsePacket( void )
 
 	if ( message.Extended || sendGoodCRC )
 	{
-		Delay_Us( 30 );
+		InterframeGap();
 		USBPD_ControlMessage_t reply = ( USBPD_ControlMessage_t ){
 			.MessageID = message.MessageID,
 			.MessageType = eUSBPD_CTRL_MSG_GOODCRC,
