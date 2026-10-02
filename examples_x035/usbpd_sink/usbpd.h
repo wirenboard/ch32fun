@@ -564,11 +564,26 @@ typedef struct
 	volatile uint8_t pdoCount;
 	bool gotSourceGoodCRC;
 	volatile uint32_t rxCount;
+	volatile uint8_t pendingReply; // message to send after our GoodCRC (REPLY_*)
+	int8_t lastRxID;               // MessageID of the last message received, -1 = none
 } USBPD_Instance_t;
+
+// replies sent from the interrupt after the GoodCRC
+#define REPLY_NONE     0
+#define REPLY_SINK_CAP 0xff // Sink_Capabilities; else a control message type
+
+// The Sink_Capabilities answer to Get_Sink_Cap: one PDO. Default: fixed
+// supply, 5 V (100 x 50 mV), 1.5 A operational (150 x 10 mA), USB
+// communications capable (bit 26). Define it before including this file
+// to describe a different sink.
+#ifndef USBPD_SINK_PDO
+#define USBPD_SINK_PDO ( ( 1u << 26 ) | ( 100u << 10 ) | 150u )
+#endif
 
 static __attribute__( ( aligned( 4 ) ) ) uint8_t s_buffer[34];
 static USBPD_Instance_t s_instance = {
 	.pdVersion = eUSBPD_REV_30,
+	.lastRxID = -1,
 };
 
 static USBPD_CC_e GetActiveCCLine( void );
@@ -686,6 +701,7 @@ void USBPD_Reset( void )
 	USBPD->PORT_CC2 &= ~CC_LVE;
 	s_instance = ( USBPD_Instance_t ){
 		.pdVersion = eUSBPD_REV_30,
+		.lastRxID = -1,
 	};
 }
 
@@ -958,6 +974,55 @@ static void ParsePacket( void )
 		}
 	}
 
+	// Messages a sink must answer. Swaps are rejected; requests this sink
+	// does not implement get Not_Supported (PD 3.0) or Reject (PD 2.0, which
+	// has no Not_Supported; unknown data messages are ignored there).
+	// Soft_Reset is accepted (counters back to 0; the source then sends its
+	// capabilities again). A retry (same MessageID as the previous message -
+	// our GoodCRC got lost) gets a GoodCRC only.
+	const bool retry = sendGoodCRC && message.MessageID == s_instance.lastRxID;
+	if ( sendGoodCRC )
+		s_instance.lastRxID = message.MessageID;
+	if ( sendGoodCRC && !retry )
+	{
+		const bool pd3 = message.SpecificationRevision >= eUSBPD_REV_30;
+		const uint8_t notSupported = pd3 ? eUSBPD_CTRL_MSG_NOT_SUPPORTED : eUSBPD_CTRL_MSG_REJECT;
+		uint8_t reply = REPLY_NONE;
+		if ( message.Extended )
+			reply = pd3 ? eUSBPD_CTRL_MSG_NOT_SUPPORTED : REPLY_NONE;
+		else if ( message.NumberOfDataObjects == 0u )
+		{
+			switch ( (USBPD_ControlMessage_e)message.MessageType )
+			{
+				case eUSBPD_CTRL_MSG_GET_SINK_CAP: reply = REPLY_SINK_CAP; break;
+				case eUSBPD_CTRL_MSG_SOFT_RESET:
+					reply = eUSBPD_CTRL_MSG_ACCEPT;
+					s_instance.messageID = 0;
+					s_instance.lastRxID = -1;
+					nextState = eSTATE_CABLE_DETECT; // wait for Source_Capabilities
+					break;
+				case eUSBPD_CTRL_MSG_DR_SWAP:
+				case eUSBPD_CTRL_MSG_PR_SWAP:
+				case eUSBPD_CTRL_MSG_VCONN_SWAP: reply = eUSBPD_CTRL_MSG_REJECT; break;
+				case eUSBPD_CTRL_MSG_GET_SOURCE_CAP:
+				case eUSBPD_CTRL_MSG_DATA_RESET:
+				case eUSBPD_CTRL_MSG_GET_SOURCE_CAPEXT:
+				case eUSBPD_CTRL_MSG_GET_STATUS:
+				case eUSBPD_CTRL_MSG_FR_SWAP:
+				case eUSBPD_CTRL_MSG_GET_PPS_STATUS:
+				case eUSBPD_CTRL_MSG_GET_COUNTRY_CODES:
+				case eUSBPD_CTRL_MSG_GET_SINK_CAPEXT:
+				case eUSBPD_CTRL_MSG_GET_SOURCE_INFO:
+				case eUSBPD_CTRL_MSG_GET_REVISION: reply = notSupported; break;
+				default: break;
+			}
+		}
+		else if ( pd3 && message.MessageType != eUSBPD_DATA_MSG_SOURCE_CAP &&
+		          message.MessageType != eUSBPD_DATA_MSG_BIST )
+			reply = eUSBPD_CTRL_MSG_NOT_SUPPORTED;
+		s_instance.pendingReply = reply;
+	}
+
 	if ( message.Extended || sendGoodCRC )
 	{
 		InterframeGap();
@@ -971,6 +1036,34 @@ static void ParsePacket( void )
 	}
 
 	s_instance.state = nextState;
+}
+
+/**
+ * @brief  Send a reply (REPLY_SINK_CAP or a control message type) after the
+ *         interframe gap. Interrupt context: bounded.
+ * @param  reply: what to send
+ * @return None
+ */
+static void SendReply( uint8_t reply )
+{
+	InterframeGap();
+	USBPD_MessageHeader_t header = ( USBPD_MessageHeader_t ){
+		.MessageID = s_instance.messageID,
+		.MessageType = reply == REPLY_SINK_CAP ? eUSBPD_DATA_MSG_SINK_CAP : reply,
+		.NumberOfDataObjects = reply == REPLY_SINK_CAP ? 1u : 0u,
+		.SpecificationRevision = s_instance.pdVersion,
+	};
+	s_buffer[0] = header.data & 0xff;
+	s_buffer[1] = header.data >> 8;
+	uint8_t size = 2;
+	if ( reply == REPLY_SINK_CAP )
+	{
+		// byte stores: s_buffer + 2 is not word aligned
+		for ( int i = 0; i < 4; i++ )
+			s_buffer[2 + i] = (uint8_t)( USBPD_SINK_PDO >> ( 8 * i ) );
+		size = 6;
+	}
+	SendMessage( size );
 }
 
 void USBPD_IRQHandler( void ) __attribute__( ( interrupt ) );
@@ -988,14 +1081,22 @@ void USBPD_IRQHandler( void )
 		USBPD->STATUS |= IF_RX_ACT;
 	}
 
-	// Transmit complete interrupt (GoodCRC only)
+	// Transmit complete interrupt
 	if ( USBPD->STATUS & IF_TX_END )
 	{
 		// end of transmission: stop driving the CC line (see SendMessage)
 		USBPD->PORT_CC1 &= ~CC_LVE;
 		USBPD->PORT_CC2 &= ~CC_LVE;
-		SwitchRXMode();
 		USBPD->STATUS |= IF_TX_END;
+		// a GoodCRC just went out for a message that needs an answer
+		const uint8_t reply = s_instance.pendingReply;
+		if ( reply != REPLY_NONE )
+		{
+			s_instance.pendingReply = REPLY_NONE;
+			SendReply( reply );
+		}
+		else
+			SwitchRXMode();
 	}
 
 	// Reset interrupt
