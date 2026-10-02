@@ -999,6 +999,19 @@ void USBFSReset()
 	USBFS->BASE_CTRL = 0x00;
 	Delay_Us(10);
 }
+#elif defined(CH32X03x)
+// Detach from the bus, so the host sees a disconnect (e.g. before a reboot
+// into the ISP bootloader). It does not wait - usable on a fault path that
+// must not depend on SysTick; the caller should allow a few ms before
+// re-attaching.
+void USBFSReset()
+{
+	NVIC_DisableIRQ( USB_IRQn );
+	USBFS->BASE_CTRL = USBFS_UC_RESET_SIE | USBFS_UC_CLR_ALL; // also drops DEV_PU_EN
+	USBFS->BASE_CTRL = 0x00;
+	AFIO->CTLR &= ~( UDP_PUE_MASK | UDM_PUE_MASK | USB_IOEN );
+	GPIOC->OUTDR &= ~( 1 << 17 ); // PC17/D+ input pull-down instead of pull-up
+}
 #else
 void USBFSReset()
 {
