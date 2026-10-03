@@ -516,7 +516,14 @@ void USBFS_IRQHandler()
 									ctx->endpoints[tep].busy = 0;
 								}
 								else if( tep < FUSB_MAX_EP_CNT && !tin && ( ctx->endpoints[tep].mode & USBFS_EP_MODE_RX ) )
-									UEP_CTRL_RX(tep) = ( UEP_CTRL_RX(tep) & ~( USBFS_UEP_R_RES_MASK | USBFS_UEP_R_TOG ) ) | USBFS_UEP_R_RES_ACK;
+								{
+									// Only a STALL becomes ACK: a NAK the application set
+									// for flow control (no room for another packet) stays.
+									uint8_t rx = UEP_CTRL_RX(tep) & ~USBFS_UEP_R_TOG;
+									if( ( rx & USBFS_UEP_R_RES_MASK ) == USBFS_UEP_R_RES_STALL )
+										rx = ( rx & ~USBFS_UEP_R_RES_MASK ) | USBFS_UEP_R_RES_ACK;
+									UEP_CTRL_RX(tep) = rx;
+								}
 								else
 									goto sendstall;
 							}
