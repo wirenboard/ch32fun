@@ -253,6 +253,11 @@ void USBFS_IRQHandler()
 					break;
 
 				default:
+					// A packet with the wrong DATA0/1 is a retransmission whose
+					// ACK the host lost: the hardware ACKs it again, but it must
+					// not be delivered twice nor flip the expected toggle.
+					if( !( intfgst & CRB_UIS_TOG_OK ) )
+						break;
 #if defined(CH5xx) || defined(CH32X03x)|| defined (CH32V10x)
 					UEP_CTRL_TX(ep) ^= USBFS_UEP_R_TOG;
 #else
