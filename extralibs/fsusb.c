@@ -605,8 +605,9 @@ void USBFS_IRQHandler()
 							else
 								goto sendstall;
 						}
-						else
+						else if( ( USBFS_SetupReqType & USB_REQ_RECIP_MASK ) != USB_REQ_RECIP_INTERF )
 							goto sendstall;
+						// interface: two zero bytes (USB 2.0 9.4.5, all bits reserved)
 						if( USBFS_SetupReqLen > 2 )
 							USBFS_SetupReqLen = 2;
 						break;
