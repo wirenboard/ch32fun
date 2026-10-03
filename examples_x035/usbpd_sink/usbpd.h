@@ -564,13 +564,13 @@ typedef struct
 	volatile uint8_t pdoCount;
 	bool gotSourceGoodCRC;
 	volatile uint32_t rxCount;
-	volatile uint8_t pendingReply; // message to send after our GoodCRC (REPLY_*)
+	volatile uint8_t pendingReply; // message to send after our GoodCRC (USBPD_REPLY_*)
 	int8_t lastRxID;               // MessageID of the last message received, -1 = none
 } USBPD_Instance_t;
 
 // replies sent from the interrupt after the GoodCRC
-#define REPLY_NONE     0
-#define REPLY_SINK_CAP 0xff // Sink_Capabilities; else a control message type
+#define USBPD_REPLY_NONE     0
+#define USBPD_REPLY_SINK_CAP 0xff // Sink_Capabilities; else a control message type
 
 // The Sink_Capabilities answer to Get_Sink_Cap: one PDO. Default: fixed
 // supply, 5 V (100 x 50 mV), 1.5 A operational (150 x 10 mA), USB
@@ -987,14 +987,14 @@ static void ParsePacket( void )
 	{
 		const bool pd3 = message.SpecificationRevision >= eUSBPD_REV_30;
 		const uint8_t notSupported = pd3 ? eUSBPD_CTRL_MSG_NOT_SUPPORTED : eUSBPD_CTRL_MSG_REJECT;
-		uint8_t reply = REPLY_NONE;
+		uint8_t reply = USBPD_REPLY_NONE;
 		if ( message.Extended )
-			reply = pd3 ? eUSBPD_CTRL_MSG_NOT_SUPPORTED : REPLY_NONE;
+			reply = pd3 ? eUSBPD_CTRL_MSG_NOT_SUPPORTED : USBPD_REPLY_NONE;
 		else if ( message.NumberOfDataObjects == 0u )
 		{
 			switch ( (USBPD_ControlMessage_e)message.MessageType )
 			{
-				case eUSBPD_CTRL_MSG_GET_SINK_CAP: reply = REPLY_SINK_CAP; break;
+				case eUSBPD_CTRL_MSG_GET_SINK_CAP: reply = USBPD_REPLY_SINK_CAP; break;
 				case eUSBPD_CTRL_MSG_SOFT_RESET:
 					reply = eUSBPD_CTRL_MSG_ACCEPT;
 					s_instance.messageID = 0;
@@ -1039,7 +1039,7 @@ static void ParsePacket( void )
 }
 
 /**
- * @brief  Send a reply (REPLY_SINK_CAP or a control message type) after the
+ * @brief  Send a reply (USBPD_REPLY_SINK_CAP or a control message type) after the
  *         interframe gap. Interrupt context: bounded.
  * @param  reply: what to send
  * @return None
@@ -1049,14 +1049,14 @@ static void SendReply( uint8_t reply )
 	InterframeGap();
 	USBPD_MessageHeader_t header = ( USBPD_MessageHeader_t ){
 		.MessageID = s_instance.messageID,
-		.MessageType = reply == REPLY_SINK_CAP ? eUSBPD_DATA_MSG_SINK_CAP : reply,
-		.NumberOfDataObjects = reply == REPLY_SINK_CAP ? 1u : 0u,
+		.MessageType = reply == USBPD_REPLY_SINK_CAP ? eUSBPD_DATA_MSG_SINK_CAP : reply,
+		.NumberOfDataObjects = reply == USBPD_REPLY_SINK_CAP ? 1u : 0u,
 		.SpecificationRevision = s_instance.pdVersion,
 	};
 	s_buffer[0] = header.data & 0xff;
 	s_buffer[1] = header.data >> 8;
 	uint8_t size = 2;
-	if ( reply == REPLY_SINK_CAP )
+	if ( reply == USBPD_REPLY_SINK_CAP )
 	{
 		// byte stores: s_buffer + 2 is not word aligned
 		for ( int i = 0; i < 4; i++ )
@@ -1090,9 +1090,9 @@ void USBPD_IRQHandler( void )
 		USBPD->STATUS |= IF_TX_END;
 		// a GoodCRC just went out for a message that needs an answer
 		const uint8_t reply = s_instance.pendingReply;
-		if ( reply != REPLY_NONE )
+		if ( reply != USBPD_REPLY_NONE )
 		{
-			s_instance.pendingReply = REPLY_NONE;
+			s_instance.pendingReply = USBPD_REPLY_NONE;
 			SendReply( reply );
 		}
 		else
